@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import "forge-std/Test.sol";
 import "../src/AetherRouter.sol";
 import "../src/AetherIntentVault.sol";
+import "../src/AetherFirewall.sol";
 
 contract DeployAetherX is Script {
     function run() external {
@@ -18,10 +19,12 @@ contract DeployAetherX is Script {
 
         AetherRouter router = new AetherRouter(aiAgentSigner);
         AetherIntentVault vault = new AetherIntentVault(aiAgentSigner, address(router));
+        AetherFirewall firewall = new AetherFirewall(aiAgentSigner);
 
-        console.log("=== AetherX Smart Contracts Deployed on OKX X Layer Testnet ===");
+        console.log("=== AetherX v2.0 Smart Contracts Deployed on OKX X Layer Testnet ===");
         console.log("AetherRouter Deployed at:", address(router));
         console.log("AetherIntentVault Deployed at:", address(vault));
+        console.log("AetherFirewall Deployed at:", address(firewall));
 
         vm.stopBroadcast();
     }
