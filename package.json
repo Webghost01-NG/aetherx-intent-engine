@@ -1,0 +1,25 @@
+{
+  "name": "aetherx-intent-engine",
+  "version": "1.0.0",
+  "description": "AetherX — Autonomous AI Intent Execution & Yield Arbitrage Agent for OKX X Layer",
+  "main": "agent/dist/index.js",
+  "scripts": {
+    "contracts:test": "cd contracts && forge test",
+    "agent:build": "cd agent && npm run build",
+    "agent:start": "cd agent && npm run start",
+    "frontend:dev": "cd frontend && npm run dev",
+    "frontend:build": "cd frontend && npm run build"
+  },
+  "keywords": [
+    "okx",
+    "x-layer",
+    "ai-agent",
+    "intent-execution",
+    "dex-arbitrage",
+    "solidity",
+    "typescript",
+    "foundry"
+  ],
+  "author": "Webghost01-NG",
+  "license": "MIT"
+}

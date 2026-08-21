@@ -1,0 +1,10 @@
+node_modules/
+dist/
+build/
+out/
+cache/
+artifacts/
+.env
+.env.local
+*.log
+.DS_Store
