@@ -12,7 +12,10 @@ import {
   AlertCircle,
   Layers,
   Activity,
-  ArrowUpRight
+  ArrowUpRight,
+  Copy,
+  Check,
+  X
 } from 'lucide-react';
 import { ethers } from 'ethers';
 import { NetworkTelemetry, IntentExecutionPayload, LogEntry } from './types';
@@ -33,17 +36,13 @@ const VAULT_ABI = [
   "function paused() external view returns (bool)"
 ];
 
-const ROUTER_ABI = [
-  "function executeIntentSwap(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut, uint256 targetVaultId, string intentTag, bytes aiSignature) external returns (uint256 amountOut)",
-  "function totalSwapsExecuted() external view returns (uint256)",
-  "function totalVolumeUSD() external view returns (uint256)"
-];
-
 export default function App() {
   const [promptInput, setPromptInput] = useState<string>("Perform cross-asset yield arbitrage and stake on X Layer");
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [connectedProvider, setConnectedProvider] = useState<any>(null);
+  const [walletName, setWalletName] = useState<string>("");
   const [ethBalance, setEthBalance] = useState<string>("0.0000");
   const [vaultShares, setVaultShares] = useState<string>("0.0000");
   const [vaultTotalSupply, setVaultTotalSupply] = useState<string>("0.0000");
@@ -52,6 +51,8 @@ export default function App() {
   const [withdrawAmount, setWithdrawAmount] = useState<string>("");
   const [actionLoading, setActionLoading] = useState<boolean>(false);
   const [lastTxHash, setLastTxHash] = useState<string | null>(null);
+  const [copied, setCopied] = useState<boolean>(false);
+  const [showWalletModal, setShowWalletModal] = useState<boolean>(false);
 
   const [telemetry, setTelemetry] = useState<NetworkTelemetry>({
     blockNumber: 2428448,
@@ -137,47 +138,89 @@ export default function App() {
     return () => clearInterval(interval);
   }, [walletAddress]);
 
-  // Connect Web3 Wallet & Switch to X Layer Testnet
-  const connectWallet = async () => {
-    if (window.ethereum) {
-      try {
-        const provider = new ethers.BrowserProvider(window.ethereum);
-        await window.ethereum.request({ method: 'eth_requestAccounts' });
+  // Multi-Wallet Connection Handler (OKX Wallet, MetaMask, Generic EVM)
+  const connectSpecificWallet = async (walletType: 'okx' | 'metamask' | 'generic') => {
+    setShowWalletModal(false);
+    let providerObj: any = null;
 
-        // Ensure X Layer Testnet chain is selected
-        try {
-          await window.ethereum.request({
-            method: 'wallet_switchEthereumChain',
-            params: [{ chainId: XLAYER_CHAIN_ID }],
-          });
-        } catch (switchError: any) {
-          if (switchError.code === 4902) {
-            await window.ethereum.request({
-              method: 'wallet_addEthereumChain',
-              params: [
-                {
-                  chainId: XLAYER_CHAIN_ID,
-                  chainName: 'OKX X Layer Testnet',
-                  rpcUrls: [XLAYER_TESTNET_RPC],
-                  nativeCurrency: { name: 'OKB', symbol: 'OKB', decimals: 18 },
-                  blockExplorerUrls: ['https://www.okx.com/web3/explorer/xlayer-test'],
-                },
-              ],
-            });
-          }
-        }
+    const win = window as any;
 
-        const signer = await provider.getSigner();
-        const address = await signer.getAddress();
-        setWalletAddress(address);
-        fetchOnChainData(address);
-
-        setStatusAlert({ type: "success", msg: `Connected to X Layer: ${address.slice(0, 6)}...${address.slice(-4)}` });
-      } catch (err: any) {
-        setStatusAlert({ type: "error", msg: "Failed to connect wallet: " + err.message });
+    if (walletType === 'okx') {
+      if (win.okxwallet) {
+        providerObj = win.okxwallet;
+      } else if (win.ethereum?.isOKExWallet || win.ethereum?.isOKXWallet) {
+        providerObj = win.ethereum;
+      } else if (win.ethereum?.providers) {
+        providerObj = win.ethereum.providers.find((p: any) => p.isOKExWallet || p.isOKXWallet);
       }
+      setWalletName("OKX Wallet");
+    } else if (walletType === 'metamask') {
+      if (win.ethereum?.isMetaMask && !win.ethereum?.isOKExWallet) {
+        providerObj = win.ethereum;
+      } else if (win.ethereum?.providers) {
+        providerObj = win.ethereum.providers.find((p: any) => p.isMetaMask && !p.isOKExWallet);
+      } else if (win.ethereum) {
+        providerObj = win.ethereum;
+      }
+      setWalletName("MetaMask");
     } else {
-      setStatusAlert({ type: "error", msg: "OKX Wallet or MetaMask extension not detected!" });
+      providerObj = win.ethereum || win.okxwallet;
+      setWalletName("EVM Wallet");
+    }
+
+    if (!providerObj) {
+      setStatusAlert({ 
+        type: "error", 
+        msg: `${walletType === 'okx' ? 'OKX Wallet' : walletType === 'metamask' ? 'MetaMask' : 'EVM Wallet'} extension not detected! Please install it in your browser.` 
+      });
+      return;
+    }
+
+    try {
+      const browserProvider = new ethers.BrowserProvider(providerObj);
+      await providerObj.request({ method: 'eth_requestAccounts' });
+
+      // Switch or Add OKX X Layer Testnet
+      try {
+        await providerObj.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: XLAYER_CHAIN_ID }],
+        });
+      } catch (switchError: any) {
+        if (switchError.code === 4902 || switchError.code === -32603) {
+          await providerObj.request({
+            method: 'wallet_addEthereumChain',
+            params: [
+              {
+                chainId: XLAYER_CHAIN_ID,
+                chainName: 'OKX X Layer Testnet',
+                rpcUrls: [XLAYER_TESTNET_RPC],
+                nativeCurrency: { name: 'OKB', symbol: 'OKB', decimals: 18 },
+                blockExplorerUrls: ['https://www.okx.com/web3/explorer/xlayer-test'],
+              },
+            ],
+          });
+        }
+      }
+
+      const signer = await browserProvider.getSigner();
+      const address = await signer.getAddress();
+      
+      setConnectedProvider(providerObj);
+      setWalletAddress(address);
+      fetchOnChainData(address);
+
+      setStatusAlert({ type: "success", msg: `Connected ${walletName || 'Wallet'}: ${address.slice(0, 6)}...${address.slice(-4)}` });
+    } catch (err: any) {
+      setStatusAlert({ type: "error", msg: "Wallet Connection Failed: " + err.message });
+    }
+  };
+
+  const copyAddress = () => {
+    if (walletAddress) {
+      navigator.clipboard.writeText(walletAddress);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     }
   };
 
@@ -222,26 +265,24 @@ export default function App() {
     }
   };
 
-  // REAL ON-CHAIN ETH DEPOSIT TRANSACTION TO AETHERINTENTVAULT
+  // REAL ON-CHAIN OKB DEPOSIT TRANSACTION TO AETHERINTENTVAULT
   const handleVaultDeposit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!depositAmount || isNaN(Number(depositAmount)) || Number(depositAmount) <= 0) return;
 
-    if (!window.ethereum || !walletAddress) {
-      setStatusAlert({ type: "error", msg: "Please connect your OKX Wallet or MetaMask first!" });
+    if (!connectedProvider || !walletAddress) {
+      setShowWalletModal(true);
       return;
     }
 
     setActionLoading(true);
-    setStatusAlert({ type: "info", msg: "Prompting Web3 wallet for REAL X Layer on-chain deposit transaction..." });
+    setStatusAlert({ type: "info", msg: `Prompting ${walletName || 'wallet'} for REAL X Layer on-chain deposit transaction...` });
 
     try {
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
-
+      const browserProvider = new ethers.BrowserProvider(connectedProvider);
+      const signer = await browserProvider.getSigner();
       const vaultContract = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, signer);
 
-      // Execute REAL on-chain deposit transaction
       const tx = await vaultContract.deposit({
         value: ethers.parseEther(depositAmount)
       });
@@ -271,18 +312,17 @@ export default function App() {
     e.preventDefault();
     if (!withdrawAmount || isNaN(Number(withdrawAmount)) || Number(withdrawAmount) <= 0) return;
 
-    if (!window.ethereum || !walletAddress) {
-      setStatusAlert({ type: "error", msg: "Please connect your OKX Wallet or MetaMask first!" });
+    if (!connectedProvider || !walletAddress) {
+      setShowWalletModal(true);
       return;
     }
 
     setActionLoading(true);
-    setStatusAlert({ type: "info", msg: "Prompting Web3 wallet for REAL X Layer on-chain withdraw transaction..." });
+    setStatusAlert({ type: "info", msg: `Prompting ${walletName || 'wallet'} for REAL X Layer on-chain withdraw transaction...` });
 
     try {
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
-
+      const browserProvider = new ethers.BrowserProvider(connectedProvider);
+      const signer = await browserProvider.getSigner();
       const vaultContract = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, signer);
 
       const tx = await vaultContract.withdraw(ethers.parseEther(withdrawAmount));
@@ -308,40 +348,40 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0B0E14] text-[#F4F4F5] font-mono flex flex-col selection:bg-[#00E599]/30">
+    <div className="min-h-screen bg-[#000000] text-[#FFFFFF] font-mono flex flex-col selection:bg-[#00FF66]/30">
       
-      {/* OKX Brand Header */}
-      <header className="border-b border-[#27272A] bg-[#000000]/90 backdrop-blur-md sticky top-0 z-50">
+      {/* OKX Web3 Header */}
+      <header className="border-b border-[#222222] bg-[#000000]/95 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex items-center justify-between">
           
           <div className="flex items-center space-x-3">
-            <div className="h-9 w-9 rounded-xl bg-gradient-to-tr from-[#00E599] via-[#00F0FF] to-[#7000FF] flex items-center justify-center text-black font-extrabold shadow-lg shadow-[#00E599]/20">
+            <div className="h-9 w-9 bg-[#00FF66] flex items-center justify-center text-black font-black">
               <Zap className="h-5 w-5" />
             </div>
             <div>
               <div className="flex items-center space-x-2">
-                <span className="text-lg font-black tracking-tight text-white">
-                  AetherX
+                <span className="text-lg font-black tracking-wider text-white">
+                  OKX :: AetherX
                 </span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#00E599]/10 text-[#00E599] border border-[#00E599]/40 font-bold">
-                  OKX X Layer Testnet
+                <span className="text-[10px] px-2 py-0.5 bg-[#00FF66]/20 text-[#00FF66] border border-[#00FF66]/40 font-bold">
+                  X LAYER TESTNET
                 </span>
               </div>
-              <p className="text-[11px] text-[#A1A1AA]">Autonomous AI Intent Engine (Chain ID: 195)</p>
+              <p className="text-[11px] text-[#888888]">Autonomous AI Intent Engine (Chain ID 195)</p>
             </div>
           </div>
 
           <div className="flex items-center space-x-4">
-            <div className="hidden md:flex items-center space-x-3 bg-[#151A23] border border-[#27272A] px-3.5 py-1.5 rounded-xl text-xs">
-              <span className="h-2 w-2 rounded-full bg-[#00E599] animate-pulse"></span>
-              <span className="text-gray-300">Block #{telemetry.blockNumber}</span>
-              <span className="text-[#27272A]">|</span>
-              <span className="text-[#00F0FF] font-bold">{telemetry.gasPriceGwei} Gwei</span>
+            <div className="hidden md:flex items-center space-x-3 bg-[#121212] border border-[#222222] px-3.5 py-1.5 rounded-lg text-xs">
+              <span className="h-2 w-2 rounded-full bg-[#00FF66] animate-pulse"></span>
+              <span className="text-[#888888]">Block #{telemetry.blockNumber}</span>
+              <span className="text-[#222222]">|</span>
+              <span className="text-[#00FF66] font-bold">{telemetry.gasPriceGwei} Gwei</span>
             </div>
 
             <button
-              onClick={connectWallet}
-              className="flex items-center space-x-2 bg-gradient-to-r from-[#00E599] to-[#00F0FF] hover:from-[#00c985] hover:to-[#00d8e6] text-black text-xs font-black px-4 py-2.5 rounded-xl transition duration-200 shadow-md shadow-[#00E599]/20"
+              onClick={() => setShowWalletModal(true)}
+              className="flex items-center space-x-2 bg-[#00FF66] hover:bg-[#00cc52] text-black text-xs font-black px-4 py-2.5 rounded transition shadow-md shadow-[#00FF66]/20"
             >
               <Wallet className="h-4 w-4" />
               <span>
@@ -359,12 +399,12 @@ export default function App() {
 
         {/* Status Alert & Explorer Transaction Link */}
         {statusAlert && (
-          <div className={`p-4 rounded-xl border flex items-center justify-between text-xs font-sans transition-all ${
+          <div className={`p-4 rounded border flex items-center justify-between text-xs font-sans transition-all ${
             statusAlert.type === 'error'
-              ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+              ? 'bg-rose-500/10 border-rose-500/40 text-rose-300'
               : statusAlert.type === 'success'
-              ? 'bg-[#00E599]/10 border-[#00E599]/40 text-[#00E599]'
-              : 'bg-[#00F0FF]/10 border-[#00F0FF]/40 text-[#00F0FF]'
+              ? 'bg-[#00FF66]/10 border-[#00FF66]/40 text-[#00FF66]'
+              : 'bg-[#FFFFFF]/10 border-[#FFFFFF]/30 text-white'
           }`}>
             <div className="flex items-center space-x-3">
               {statusAlert.type === 'error' ? <AlertCircle className="h-5 w-5 shrink-0" /> : <CheckCircle className="h-5 w-5 shrink-0" />}
@@ -375,7 +415,7 @@ export default function App() {
                     href={`https://www.okx.com/web3/explorer/xlayer-test/tx/${lastTxHash}`}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-[#00F0FF] underline font-mono text-[11px] mt-1 inline-flex items-center space-x-1"
+                    className="text-[#00FF66] underline font-mono text-[11px] mt-1 inline-flex items-center space-x-1"
                   >
                     <span>View Real Transaction on OKX X Layer Explorer</span>
                     <ExternalLink className="h-3 w-3" />
@@ -387,69 +427,101 @@ export default function App() {
           </div>
         )}
 
+        {/* OKB Faucet & Connected Wallet Balance Card */}
+        <div className="bg-[#121212] border border-[#222222] rounded-xl p-4.5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex items-center space-x-2 text-xs">
+              <span className="text-[#888888]">Connected Wallet Balance:</span>
+              <span className="text-[#00FF66] font-bold text-sm">{ethBalance} OKB</span>
+            </div>
+            {walletAddress ? (
+              <div className="flex items-center space-x-2 text-[11px] text-gray-400">
+                <span>Address:</span>
+                <span className="text-white font-mono">{walletAddress}</span>
+                <button onClick={copyAddress} className="text-[#00FF66] hover:underline flex items-center space-x-1">
+                  {copied ? <Check className="h-3.5 w-3.5 text-[#00FF66]" /> : <Copy className="h-3.5 w-3.5" />}
+                  <span>{copied ? "Copied" : "Copy"}</span>
+                </button>
+              </div>
+            ) : (
+              <p className="text-[11px] text-[#888888]">Connect your OKX Wallet or MetaMask to check live OKB balance on X Layer Testnet.</p>
+            )}
+          </div>
+
+          <a
+            href="https://web3.okx.com/xlayer/faucet"
+            target="_blank"
+            rel="noreferrer"
+            className="bg-[#222222] hover:bg-[#333333] border border-[#444444] text-white text-xs font-bold px-4 py-2.5 rounded flex items-center space-x-2 shrink-0 transition"
+          >
+            <span>Get OKB Testnet Faucet Tokens</span>
+            <ExternalLink className="h-3.5 w-3.5 text-[#00FF66]" />
+          </a>
+        </div>
+
         {/* Top Banner Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
-          <div className="bg-[#151A23] border border-[#27272A] rounded-2xl p-4.5 hover:border-[#00E599]/40 transition">
-            <div className="text-xs text-[#A1A1AA] flex items-center justify-between mb-1.5">
+          <div className="bg-[#121212] border border-[#222222] rounded-xl p-4.5 hover:border-[#00FF66]/40 transition okx-green-glow">
+            <div className="text-xs text-[#888888] flex items-center justify-between mb-1.5">
               <span>Vault Total Supply</span>
-              <Layers className="h-4 w-4 text-[#00E599]" />
+              <Layers className="h-4 w-4 text-[#00FF66]" />
             </div>
             <div className="text-xl font-bold text-white">{vaultTotalSupply} aETHX</div>
-            <div className="text-[11px] text-[#00E599] mt-1">Live On-Chain Supply</div>
+            <div className="text-[11px] text-[#00FF66] mt-1 font-bold">Live On-Chain Supply</div>
           </div>
 
-          <div className="bg-[#151A23] border border-[#27272A] rounded-2xl p-4.5 hover:border-[#00F0FF]/40 transition">
-            <div className="text-xs text-[#A1A1AA] flex items-center justify-between mb-1.5">
+          <div className="bg-[#121212] border border-[#222222] rounded-xl p-4.5 hover:border-[#00FF66]/40 transition">
+            <div className="text-xs text-[#888888] flex items-center justify-between mb-1.5">
               <span>Net AI Yield APY</span>
-              <Activity className="h-4 w-4 text-[#00F0FF]" />
+              <Activity className="h-4 w-4 text-[#00FF66]" />
             </div>
-            <div className="text-xl font-bold text-[#00F0FF]">11.40%</div>
-            <div className="text-[11px] text-gray-400 mt-1">Real-time DEX Arbitrage</div>
+            <div className="text-xl font-bold text-[#00FF66]">11.40%</div>
+            <div className="text-[11px] text-[#888888] mt-1">Real-time DEX Arbitrage</div>
           </div>
 
-          <div className="bg-[#151A23] border border-[#27272A] rounded-2xl p-4.5 hover:border-[#7000FF]/40 transition">
-            <div className="text-xs text-[#A1A1AA] flex items-center justify-between mb-1.5">
+          <div className="bg-[#121212] border border-[#222222] rounded-xl p-4.5 hover:border-[#00FF66]/40 transition">
+            <div className="text-xs text-[#888888] flex items-center justify-between mb-1.5">
               <span>Your $aETHX Shares</span>
-              <Wallet className="h-4 w-4 text-purple-400" />
+              <Wallet className="h-4 w-4 text-[#00FF66]" />
             </div>
-            <div className="text-xl font-bold text-purple-300">{vaultShares} aETHX</div>
-            <div className="text-[11px] text-gray-400 mt-1">Wallet ETH: {ethBalance}</div>
+            <div className="text-xl font-bold text-white">{vaultShares} aETHX</div>
+            <div className="text-[11px] text-[#888888] mt-1">Wallet OKB: {ethBalance}</div>
           </div>
 
-          <div className="bg-[#151A23] border border-[#27272A] rounded-2xl p-4.5">
-            <div className="text-xs text-[#A1A1AA] flex items-center justify-between mb-1.5">
+          <div className="bg-[#121212] border border-[#222222] rounded-xl p-4.5">
+            <div className="text-xs text-[#888888] flex items-center justify-between mb-1.5">
               <span>Risk Safety Score</span>
-              <ShieldCheck className="h-4 w-4 text-[#00E599]" />
+              <ShieldCheck className="h-4 w-4 text-[#00FF66]" />
             </div>
-            <div className="text-xl font-bold text-[#00E599]">92 / 100</div>
-            <div className="text-[11px] text-[#00E599] mt-1">AAA Safe Protection</div>
+            <div className="text-xl font-bold text-[#00FF66]">92 / 100</div>
+            <div className="text-[11px] text-[#00FF66] mt-1 font-bold">AAA Safe Protection</div>
           </div>
         </div>
 
         {/* Claude Terminal AI Prompt Input */}
-        <div className="bg-[#151A23] border border-[#27272A] rounded-2xl p-5 space-y-4">
+        <div className="bg-[#121212] border border-[#222222] rounded-xl p-5 space-y-4">
           <div className="flex items-center justify-between text-xs">
             <div className="flex items-center space-x-2">
-              <Cpu className="h-4.5 w-4.5 text-[#00E599]" />
+              <Cpu className="h-4.5 w-4.5 text-[#00FF66]" />
               <span className="font-bold text-white">Natural Language AI Intent Terminal</span>
             </div>
-            <span className="text-[11px] text-[#00E599] font-bold">X Layer Live Agent</span>
+            <span className="text-[11px] text-[#00FF66] font-bold">X Layer Live Agent</span>
           </div>
 
           <form onSubmit={handleExecuteIntent} className="space-y-3">
             <div className="relative flex items-center">
-              <span className="absolute left-4 text-[#00E599] font-bold text-sm">&gt;</span>
+              <span className="absolute left-4 text-[#00FF66] font-bold text-sm">&gt;</span>
               <input
                 type="text"
                 value={promptInput}
                 onChange={(e) => setPromptInput(e.target.value)}
                 placeholder="Type financial intent (e.g. 'Perform yield arbitrage on X Layer')..."
-                className="w-full bg-[#0B0E14] border border-[#27272A] rounded-xl pl-9 pr-24 py-3 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-[#00E599] font-mono transition"
+                className="w-full bg-[#000000] border border-[#222222] rounded pl-9 pr-28 py-3 text-xs text-white placeholder-[#555555] focus:outline-none focus:border-[#00FF66] font-mono transition"
               />
               <button
                 type="submit"
                 disabled={isProcessing}
-                className="absolute right-2 bg-[#00E599] hover:bg-[#00c985] text-black font-extrabold text-xs px-3.5 py-1.5 rounded-lg transition flex items-center space-x-1"
+                className="absolute right-2 bg-[#00FF66] hover:bg-[#00cc52] text-black font-extrabold text-xs px-3.5 py-1.5 rounded transition flex items-center space-x-1"
               >
                 {isProcessing ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="h-3.5 w-3.5" />}
                 <span>Execute Intent</span>
@@ -458,10 +530,10 @@ export default function App() {
           </form>
 
           {currentPayload && (
-            <div className="bg-[#0B0E14] border border-[#27272A] rounded-xl p-4 space-y-2 text-xs">
+            <div className="bg-[#000000] border border-[#222222] rounded p-4 space-y-2 text-xs">
               <div className="flex items-center justify-between text-[11px]">
-                <span className="text-[#00E599] font-bold uppercase">Parsed Action: {currentPayload.parsedIntent.action}</span>
-                <span className="text-[#00F0FF] font-bold">Target Yield: {currentPayload.parsedIntent.expectedAPY}</span>
+                <span className="text-[#00FF66] font-bold uppercase">Parsed Action: {currentPayload.parsedIntent.action}</span>
+                <span className="text-[#00FF66] font-bold">Target Yield: {currentPayload.parsedIntent.expectedAPY}</span>
               </div>
               <p className="text-gray-300 leading-relaxed font-sans">{currentPayload.parsedIntent.reasoning}</p>
             </div>
@@ -472,15 +544,13 @@ export default function App() {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
 
           {/* REAL ON-CHAIN CONTRACT WIDGET */}
-          <div className="lg:col-span-5 bg-[#151A23] border border-[#27272A] rounded-2xl p-5 space-y-5">
-            <div className="flex items-center justify-between border-b border-[#27272A] pb-3">
+          <div className="lg:col-span-5 bg-[#121212] border border-[#222222] rounded-xl p-5 space-y-5">
+            <div className="flex items-center justify-between border-b border-[#222222] pb-3">
               <div>
-                <h2 className="text-sm font-bold text-white flex items-center space-x-2">
-                  <span>AetherIntentVault On-Chain Actions</span>
-                </h2>
-                <p className="text-[11px] text-gray-400">Triggers real Web3 transactions on X Layer Testnet</p>
+                <h2 className="text-sm font-bold text-white">AetherIntentVault On-Chain Actions</h2>
+                <p className="text-[11px] text-[#888888]">Triggers real Web3 transactions on X Layer Testnet</p>
               </div>
-              <span className="text-xs px-2 py-0.5 rounded bg-[#00E599]/20 text-[#00E599] font-bold border border-[#00E599]/30">
+              <span className="text-xs px-2 py-0.5 bg-[#00FF66]/20 text-[#00FF66] font-bold border border-[#00FF66]/40">
                 LIVE ON-CHAIN
               </span>
             </div>
@@ -498,23 +568,23 @@ export default function App() {
                     placeholder="0.001"
                     value={depositAmount}
                     onChange={(e) => setDepositAmount(e.target.value)}
-                    className="w-full bg-[#0B0E14] border border-[#27272A] rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-[#00E599]"
+                    className="w-full bg-[#000000] border border-[#222222] rounded px-3.5 py-2.5 text-xs text-white placeholder-[#555555] focus:outline-none focus:border-[#00FF66]"
                   />
-                  <span className="absolute right-3 top-2.5 text-[11px] font-bold text-[#00E599]">OKB</span>
+                  <span className="absolute right-3 top-2.5 text-[11px] font-bold text-[#00FF66]">OKB</span>
                 </div>
               </div>
 
               <button
                 type="submit"
                 disabled={actionLoading}
-                className="w-full bg-gradient-to-r from-[#00E599] to-[#00F0FF] hover:from-[#00c985] hover:to-[#00d8e6] text-black font-extrabold text-xs py-2.5 rounded-xl transition duration-200 flex items-center justify-center space-x-2 shadow-md shadow-[#00E599]/20"
+                className="w-full bg-[#00FF66] hover:bg-[#00cc52] text-black font-black text-xs py-2.5 rounded transition flex items-center justify-center space-x-2 shadow-md shadow-[#00FF66]/20"
               >
                 {actionLoading ? <RefreshCw className="h-4 w-4 animate-spin text-black" /> : <ArrowUpRight className="h-4 w-4 text-black" />}
                 <span>Execute Real Deposit on X Layer</span>
               </button>
             </form>
 
-            <div className="border-t border-[#27272A]"></div>
+            <div className="border-t border-[#222222]"></div>
 
             {/* Real Redeem Form */}
             <form onSubmit={handleVaultWithdraw} className="space-y-3">
@@ -529,42 +599,42 @@ export default function App() {
                     placeholder="0.001"
                     value={withdrawAmount}
                     onChange={(e) => setWithdrawAmount(e.target.value)}
-                    className="w-full bg-[#0B0E14] border border-[#27272A] rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-purple-500"
+                    className="w-full bg-[#000000] border border-[#222222] rounded px-3.5 py-2.5 text-xs text-white placeholder-[#555555] focus:outline-none focus:border-[#00FF66]"
                   />
-                  <span className="absolute right-3 top-2.5 text-[11px] font-bold text-purple-400">aETHX</span>
+                  <span className="absolute right-3 top-2.5 text-[11px] font-bold text-[#00FF66]">aETHX</span>
                 </div>
               </div>
 
               <button
                 type="submit"
                 disabled={actionLoading}
-                className="w-full bg-[#1F2937] hover:bg-[#374151] border border-gray-700 text-white font-bold text-xs py-2.5 rounded-xl transition"
+                className="w-full bg-[#222222] hover:bg-[#333333] border border-[#444444] text-white font-bold text-xs py-2.5 rounded transition"
               >
                 <span>Execute Real Redeem on X Layer</span>
               </button>
             </form>
 
             {/* Contract Information */}
-            <div className="bg-[#0B0E14] rounded-xl p-3.5 border border-[#27272A] text-[11px] space-y-2">
-              <div className="flex items-center justify-between text-gray-400">
+            <div className="bg-[#000000] rounded p-3.5 border border-[#222222] text-[11px] space-y-2">
+              <div className="flex items-center justify-between text-[#888888]">
                 <span>Vault Address:</span>
                 <a
                   href={`https://www.okx.com/web3/explorer/xlayer-test/address/${VAULT_ADDRESS}`}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-[#00F0FF] font-mono hover:underline flex items-center space-x-1 font-bold"
+                  className="text-[#00FF66] font-mono hover:underline flex items-center space-x-1 font-bold"
                 >
                   <span>{VAULT_ADDRESS.slice(0, 8)}...{VAULT_ADDRESS.slice(-6)}</span>
                   <ExternalLink className="h-3 w-3" />
                 </a>
               </div>
-              <div className="flex items-center justify-between text-gray-400">
+              <div className="flex items-center justify-between text-[#888888]">
                 <span>Router Address:</span>
                 <a
                   href={`https://www.okx.com/web3/explorer/xlayer-test/address/${ROUTER_ADDRESS}`}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-[#00F0FF] font-mono hover:underline flex items-center space-x-1 font-bold"
+                  className="text-[#00FF66] font-mono hover:underline flex items-center space-x-1 font-bold"
                 >
                   <span>{ROUTER_ADDRESS.slice(0, 8)}...{ROUTER_ADDRESS.slice(-6)}</span>
                   <ExternalLink className="h-3 w-3" />
@@ -574,25 +644,25 @@ export default function App() {
           </div>
 
           {/* Live AI Streaming Terminal */}
-          <div className="lg:col-span-7 bg-[#151A23] border border-[#27272A] rounded-2xl p-5 flex flex-col space-y-4">
-            <div className="flex items-center justify-between border-b border-[#27272A] pb-3">
+          <div className="lg:col-span-7 bg-[#121212] border border-[#222222] rounded-xl p-5 flex flex-col space-y-4">
+            <div className="flex items-center justify-between border-b border-[#222222] pb-3">
               <div className="flex items-center space-x-2">
-                <TerminalIcon className="h-4 w-4 text-[#00E599]" />
+                <TerminalIcon className="h-4 w-4 text-[#00FF66]" />
                 <h2 className="text-sm font-bold text-white">Live AI Execution Terminal</h2>
               </div>
-              <span className="text-[11px] text-[#00E599]">X Layer RPC: Online</span>
+              <span className="text-[11px] text-[#00FF66]">X Layer RPC: Online</span>
             </div>
 
-            <div className="flex-1 bg-[#0B0E14] border border-[#27272A] rounded-xl p-4 font-mono text-[11px] overflow-y-auto max-h-80 space-y-2">
+            <div className="flex-1 bg-[#000000] border border-[#222222] rounded p-4 font-mono text-[11px] overflow-y-auto max-h-80 space-y-2">
               {logs.map((log, idx) => (
                 <div key={idx} className="flex items-start space-x-2 leading-relaxed">
-                  <span className="text-gray-500 shrink-0">[{log.timestamp.slice(11, 19)}]</span>
+                  <span className="text-[#666666] shrink-0">[{log.timestamp.slice(11, 19)}]</span>
                   <span className={`px-1.5 py-0.2 rounded text-[10px] shrink-0 font-bold ${
                     log.type === 'EXECUTION_SIGN'
-                      ? 'bg-[#00E599]/20 text-[#00E599]'
+                      ? 'bg-[#00FF66]/20 text-[#00FF66]'
                       : log.type === 'AI_PARSE'
-                      ? 'bg-[#00F0FF]/20 text-[#00F0FF]'
-                      : 'bg-[#27272A] text-gray-300'
+                      ? 'bg-white/20 text-white'
+                      : 'bg-[#222222] text-[#888888]'
                   }`}>
                     {log.type}
                   </span>
@@ -605,10 +675,85 @@ export default function App() {
 
       </main>
 
+      {/* Multi-Wallet Connection Modal */}
+      {showWalletModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#121212] border border-[#222222] rounded-xl max-w-md w-full p-6 space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-[#222222] pb-4">
+              <div className="flex items-center space-x-2">
+                <Wallet className="h-5 w-5 text-[#00FF66]" />
+                <h3 className="text-base font-bold text-white">Select Web3 Wallet</h3>
+              </div>
+              <button 
+                onClick={() => setShowWalletModal(false)}
+                className="text-gray-400 hover:text-white p-1 rounded hover:bg-[#222222]"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-[#888888]">Choose your preferred EVM wallet to connect to OKX X Layer Testnet:</p>
+
+            <div className="space-y-3">
+              {/* OKX Wallet */}
+              <button
+                onClick={() => connectSpecificWallet('okx')}
+                className="w-full bg-[#000000] hover:bg-[#1a1a1a] border border-[#222222] hover:border-[#00FF66] rounded-xl p-4 flex items-center justify-between text-left transition group"
+              >
+                <div className="flex items-center space-x-3">
+                  <div className="h-10 w-10 rounded bg-[#00FF66] text-black font-black flex items-center justify-center text-sm">
+                    OKX
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-white group-hover:text-[#00FF66] transition">OKX Wallet</p>
+                    <p className="text-[11px] text-[#888888]">Native OKX Web3 Extension</p>
+                  </div>
+                </div>
+                <ArrowRight className="h-4 w-4 text-[#888888] group-hover:text-[#00FF66] transition" />
+              </button>
+
+              {/* MetaMask */}
+              <button
+                onClick={() => connectSpecificWallet('metamask')}
+                className="w-full bg-[#000000] hover:bg-[#1a1a1a] border border-[#222222] hover:border-[#00FF66] rounded-xl p-4 flex items-center justify-between text-left transition group"
+              >
+                <div className="flex items-center space-x-3">
+                  <div className="h-10 w-10 rounded bg-[#D97706]/20 text-[#D97706] border border-[#D97706]/40 font-black flex items-center justify-center text-sm">
+                    🦊
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-white group-hover:text-[#00FF66] transition">MetaMask</p>
+                    <p className="text-[11px] text-[#888888]">Popular EVM Browser Wallet</p>
+                  </div>
+                </div>
+                <ArrowRight className="h-4 w-4 text-[#888888] group-hover:text-[#00FF66] transition" />
+              </button>
+
+              {/* Generic Browser EVM Wallet */}
+              <button
+                onClick={() => connectSpecificWallet('generic')}
+                className="w-full bg-[#000000] hover:bg-[#1a1a1a] border border-[#222222] hover:border-[#00FF66] rounded-xl p-4 flex items-center justify-between text-left transition group"
+              >
+                <div className="flex items-center space-x-3">
+                  <div className="h-10 w-10 rounded bg-[#222222] text-white font-black flex items-center justify-center text-sm">
+                    EVM
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-white group-hover:text-[#00FF66] transition">Browser EVM Wallet</p>
+                    <p className="text-[11px] text-[#888888]">Coinbase / Trust / Injected EVM</p>
+                  </div>
+                </div>
+                <ArrowRight className="h-4 w-4 text-[#888888] group-hover:text-[#00FF66] transition" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Footer */}
-      <footer className="border-t border-[#27272A] bg-[#000000] py-4 text-center text-[11px] text-gray-500 space-y-1">
+      <footer className="border-t border-[#222222] bg-[#000000] py-4 text-center text-[11px] text-[#888888] space-y-1">
         <p>AetherX Protocol — Submitted for OKX Web3 Build X Hackathon 2026 (AI Season)</p>
-        <p className="text-gray-600">Pure TypeScript &amp; Solidity | Deployed on OKX X Layer Testnet (Chain ID 195)</p>
+        <p className="text-[#555555]">Pure TypeScript &amp; Solidity | Deployed on OKX X Layer Testnet (Chain ID 195)</p>
       </footer>
     </div>
   );

@@ -4,31 +4,31 @@
 
 body {
   margin: 0;
-  background-color: #0e0e10;
-  color: #f4f4f5;
+  background-color: #000000;
+  color: #ffffff;
   font-family: 'JetBrains Mono', monospace;
 }
 
-/* Custom Claude-Code Terminal Scrollbar & Glows */
+/* OKX Web3 Dark Theme Scrollbar & Glow */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #18181b;
+  background: #121212;
 }
 ::-webkit-scrollbar-thumb {
-  background: #27272a;
+  background: #2b2b2b;
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3f3f46;
+  background: #444444;
 }
 
-.terminal-border {
-  border: 1px solid rgba(255, 255, 255, 0.08);
+.okx-border {
+  border: 1px solid #222222;
 }
 
-.claude-amber-glow {
-  box-shadow: 0 0 30px -8px rgba(217, 119, 6, 0.25);
+.okx-green-glow {
+  box-shadow: 0 0 25px -5px rgba(0, 255, 102, 0.25);
 }
