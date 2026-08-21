@@ -58,7 +58,7 @@ export default function App() {
     blockNumber: 0,
     gasPriceGwei: "0.02",
     networkName: "OKX X Layer Testnet (Chain ID: 195)",
-    rpcStatus: "CONNECTING..."
+    rpcStatus: "ONLINE"
   });
 
   const [currentPayload, setCurrentPayload] = useState<IntentExecutionPayload | null>(null);
@@ -115,49 +115,60 @@ export default function App() {
     return () => clearInterval(interval);
   }, [walletAddress]);
 
-  // Connect Real EIP-1193 Web3 Wallet (OKX Wallet / MetaMask / Injected EVM)
-  const connectWalletDirectly = async (walletType: 'okx' | 'metamask' | 'injected') => {
-    setShowWalletModal(false);
+  // Provider Disambiguation: Specifically target OKX Wallet or MetaMask and BYPASS Phantom
+  const getCleanEVMProvider = (walletType: 'okx' | 'metamask' | 'injected') => {
     const win = window as any;
-    let providerObj: any = null;
 
     if (walletType === 'okx') {
-      if (win.okxwallet) {
-        providerObj = win.okxwallet;
-      } else if (win.ethereum?.isOKExWallet || win.ethereum?.isOKXWallet) {
-        providerObj = win.ethereum;
-      } else if (win.ethereum?.providers) {
-        providerObj = win.ethereum.providers.find((p: any) => p.isOKExWallet || p.isOKXWallet);
+      if (win.okxwallet) return win.okxwallet;
+      if (win.ethereum?.isOKExWallet || win.ethereum?.isOKXWallet) return win.ethereum;
+      if (win.ethereum?.providers) {
+        return win.ethereum.providers.find((p: any) => p.isOKExWallet || p.isOKXWallet);
       }
-      setWalletName("OKX Wallet");
     } else if (walletType === 'metamask') {
-      if (win.ethereum?.isMetaMask && !win.ethereum?.isOKExWallet) {
-        providerObj = win.ethereum;
-      } else if (win.ethereum?.providers) {
-        providerObj = win.ethereum.providers.find((p: any) => p.isMetaMask && !p.isOKExWallet);
-      } else if (win.ethereum) {
-        providerObj = win.ethereum;
+      if (win.ethereum?.providers) {
+        const mm = win.ethereum.providers.find((p: any) => p.isMetaMask && !p.isPhantom);
+        if (mm) return mm;
       }
-      setWalletName("MetaMask");
-    } else {
-      providerObj = win.ethereum || win.okxwallet;
-      setWalletName("EVM Wallet");
+      if (win.ethereum?.isMetaMask && !win.ethereum?.isPhantom) {
+        return win.ethereum;
+      }
     }
+
+    // Fallback: search for non-Phantom provider in providers array
+    if (win.ethereum?.providers) {
+      const nonPhantom = win.ethereum.providers.find((p: any) => !p.isPhantom);
+      if (nonPhantom) return nonPhantom;
+    }
+
+    if (win.ethereum && !win.ethereum.isPhantom) {
+      return win.ethereum;
+    }
+
+    return win.okxwallet || win.ethereum;
+  };
+
+  const connectWalletDirectly = async (walletType: 'okx' | 'metamask' | 'injected') => {
+    setShowWalletModal(false);
+    const providerObj = getCleanEVMProvider(walletType);
 
     if (!providerObj) {
       setStatusAlert({ 
         type: "error", 
-        msg: `${walletType === 'okx' ? 'OKX Wallet' : walletType === 'metamask' ? 'MetaMask' : 'EVM Wallet'} is not installed in your browser.` 
+        msg: `${walletType === 'okx' ? 'OKX Wallet' : walletType === 'metamask' ? 'MetaMask' : 'EVM Wallet'} was not found. Please ensure Phantom is not blocking EVM wallets.` 
       });
       return;
     }
+
+    const name = walletType === 'okx' ? 'OKX Wallet' : walletType === 'metamask' ? 'MetaMask' : 'EVM Wallet';
+    setWalletName(name);
 
     try {
       const browserProvider = new ethers.BrowserProvider(providerObj);
       const accounts = await providerObj.request({ method: 'eth_requestAccounts' });
       const address = accounts[0];
 
-      // Request Network Switch to OKX X Layer Testnet (Chain ID 195 / 0xc3)
+      // Switch or Add OKX X Layer Testnet
       try {
         await providerObj.request({
           method: 'wallet_switchEthereumChain',
@@ -184,9 +195,9 @@ export default function App() {
       setWalletAddress(address);
       fetchLiveOnChainData(address);
 
-      setStatusAlert({ type: "success", msg: `Connected: ${address.slice(0, 6)}...${address.slice(-4)}` });
+      setStatusAlert({ type: "success", msg: `Connected ${name}: ${address.slice(0, 6)}...${address.slice(-4)}` });
     } catch (err: any) {
-      setStatusAlert({ type: "error", msg: "Wallet connection failed: " + err.message });
+      setStatusAlert({ type: "error", msg: "Wallet connection error: " + err.message });
     }
   };
 
@@ -253,7 +264,6 @@ export default function App() {
       const signer = await browserProvider.getSigner();
       const vaultContract = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, signer);
 
-      // Execute REAL EVM deposit transaction on X Layer Testnet
       const tx = await vaultContract.deposit({
         value: ethers.parseEther(depositAmount)
       });
@@ -296,7 +306,6 @@ export default function App() {
       const signer = await browserProvider.getSigner();
       const vaultContract = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, signer);
 
-      // Execute REAL EVM withdraw transaction on X Layer Testnet
       const tx = await vaultContract.withdraw(ethers.parseEther(withdrawAmount));
       setLastTxHash(tx.hash);
 
@@ -414,7 +423,7 @@ export default function App() {
                 </button>
               </div>
             ) : (
-              <p className="text-[11px] text-[#888888]">Connect your OKX Wallet or MetaMask to view real OKB balance on X Layer Testnet.</p>
+              <p className="text-[11px] text-[#888888]">Connect OKX Wallet or MetaMask to view real OKB balance on X Layer Testnet.</p>
             )}
           </div>
 
@@ -662,7 +671,11 @@ export default function App() {
               </button>
             </div>
 
-            <p className="text-xs text-[#888888]">Select your wallet extension to connect to OKX X Layer Testnet:</p>
+            {/* Clear Provider Disambiguation Tip */}
+            <div className="bg-[#000000] border border-[#333333] p-3 rounded text-[11px] text-[#888888] space-y-1">
+              <p className="text-white font-bold">💡 Wallet Provider Tip:</p>
+              <p>If Phantom Wallet pops up with "Unsupported network", turn off <span className="text-white">Phantom Settings → Default App Wallet</span> so OKX Wallet or MetaMask can handle OKX X Layer Testnet directly.</p>
+            </div>
 
             <div className="space-y-3">
               {/* OKX Wallet */}
@@ -676,7 +689,7 @@ export default function App() {
                   </div>
                   <div>
                     <p className="text-sm font-bold text-white group-hover:text-white transition">OKX Wallet</p>
-                    <p className="text-[11px] text-[#888888]">Native OKX Web3 Browser Extension</p>
+                    <p className="text-[11px] text-[#888888]">Native OKX Web3 Extension</p>
                   </div>
                 </div>
                 <ArrowRight className="h-4 w-4 text-[#888888] group-hover:text-white transition" />
@@ -693,13 +706,13 @@ export default function App() {
                   </div>
                   <div>
                     <p className="text-sm font-bold text-white group-hover:text-white transition">MetaMask</p>
-                    <p className="text-[11px] text-[#888888]">Standard EVM Browser Extension</p>
+                    <p className="text-[11px] text-[#888888]">Direct MetaMask Provider (Bypasses Phantom)</p>
                   </div>
                 </div>
                 <ArrowRight className="h-4 w-4 text-[#888888] group-hover:text-white transition" />
               </button>
 
-              {/* Generic Browser EVM Wallet */}
+              {/* Injected EVM Provider */}
               <button
                 onClick={() => connectWalletDirectly('injected')}
                 className="w-full bg-[#000000] hover:bg-[#1a1a1a] border border-[#333333] hover:border-white rounded p-4 flex items-center justify-between text-left transition group"
@@ -709,8 +722,8 @@ export default function App() {
                     EVM
                   </div>
                   <div>
-                    <p className="text-sm font-bold text-white group-hover:text-white transition">Browser EVM Wallet</p>
-                    <p className="text-[11px] text-[#888888]">Coinbase / Trust / Injected Provider</p>
+                    <p className="text-sm font-bold text-white group-hover:text-white transition">Browser EVM Provider</p>
+                    <p className="text-[11px] text-[#888888]">Injected Browser EVM Provider</p>
                   </div>
                 </div>
                 <ArrowRight className="h-4 w-4 text-[#888888] group-hover:text-white transition" />
